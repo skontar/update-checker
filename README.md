@@ -9,6 +9,24 @@ It checks for updates in time intervals and notifies user about updates being re
 and yellow/red icon (for regular/security updates). As a default it only cares about security
 updates and checks every 4 hours.
 
+It also checks if either 'screen' or 'tmux' is installed and uses it for calling 'dnf upgrade', so
+if X server crashes during the update process, it continues independently. It is highly recommended
+to install either.
+
+See https://goo.gl/hOFxid for one instance of a problem when crashing X server crashed the update
+process and corrupted RPM database. Better to be safe than sorry.
+
+To make mouse scrolling working in 'screen', add the following line to '~/.screenrc':
+
+    termcapinfo xterm* ti@:te@
+
+To make mouse scrolling working in 'tmux', add the following line to '~/.tmux.conf':
+
+    set -g terminal-overrides 'xterm*:smcup@:rmcup@'
+
+*or*
+
+    set -g mouse on
 
 ## Installation
 
@@ -27,6 +45,8 @@ detected. It also has a few commandline switches:
     -h, --help            show this help message and exit
     -a, --all             report on all updates, not just security ones
                           (default: False)
+    -s, --no-safe-update  do not use either screen or tmux for safer updates
+                          (default: False)
     -n, --normal-terminal
                           use normal terminal window, by default dropdown
                           terminal is used (default: False)
@@ -37,7 +57,7 @@ detected. It also has a few commandline switches:
 
 ## Testing
 
-It was tested on various Fedora 22 and Fedora 23 desktop systems, mostly XFCE spins.
+It was tested on various Fedora 22-24 desktop systems, mostly XFCE spins.
 
 
 ## Icons artwork

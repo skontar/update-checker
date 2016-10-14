@@ -12,7 +12,25 @@ modification.
 It checks for updates in time intervals and notifies user about updates being ready by notification
 and yellow/red icon (for regular/security updates). As a default it only cares about security
 updates and checks every 4 hours.
+
+It also checks if either 'screen' or 'tmux' is installed and uses it for calling 'dnf upgrade', so
+if X server crashes during the update process, it continues independently. It is highly recommended
+to install either.
 """
+# See https://goo.gl/hOFxid for one instance of a problem when crashing X server crashed the update
+# process and corrupted RPM database. Better to be safe than sorry.
+#
+# To make mouse scrolling working in 'screen', add the following line to '~/.screenrc':
+#
+#     termcapinfo xterm* ti@:te@
+#
+# To make mouse scrolling working in 'tmux', add the following line to '~/.tmux.conf':
+#
+#     set -g terminal-overrides 'xterm*:smcup@:rmcup@'
+#
+# *or*
+#
+#     set -g mouse on
 
 import argparse
 from os import path
@@ -25,16 +43,29 @@ gi.require_version('Gtk', '3.0')
 gi.require_version('Notify', '0.7')
 from gi.repository import GLib, Gtk, Notify
 
-
 COMMAND_DNF_UPDATEINFO = 'nice -n 19 dnf updateinfo list updates --refresh'
 COMMAND_DNF_UPGRADE = 'sudo dnf upgrade'
-BASH_COMMAND = 'bash -c \'echo {dnf}; {dnf}; read -p "Press ENTER to close window"\''
+BASH_COMMAND = '{safe_wrapper} bash -c \'echo {dnf}; {dnf}; read -p "Press ENTER to close window"\''
 COMMAND_TERMINAL = 'xfce4-terminal --maximize -x {}'.format(BASH_COMMAND)
 COMMAND_DROPDOWN = 'xfce4-terminal --tab --title Update --drop-down -x {}'.format(BASH_COMMAND)
 
 WD = path.dirname(path.abspath(sys.argv[0]))  # Manage to run script anywhere in the path
 ICON_YELLOW = path.join(WD, 'Hopstarter-Soft-Scraps-Button-Blank-Yellow.ico')
 ICON_RED = path.join(WD, 'Hopstarter-Soft-Scraps-Button-Blank-Red.ico')
+
+
+def safe_wrapper():
+    """
+    Checks if 'screen' or 'tmux' are installed and returns appropriate wrapper to use.
+
+    Returns:
+         (str): command to add as part of dnf upgrade command to make it safe from X server crashes
+    """
+    if call('command -v screen', shell=True) == 0:
+        return 'screen'
+    if call('command -v tmux', shell=True) == 0:
+        return 'tmux new'
+    return ''
 
 
 def dnf_check_updates():
@@ -56,7 +87,7 @@ def dnf_check_updates():
     return updates
 
 
-def dnf_upgrade(normal_terminal=False, packages=None):
+def dnf_upgrade(normal_terminal=False, packages=None, no_safe=False):
     """
     Run terminal and start dnf upgrade command.
 
@@ -69,17 +100,24 @@ def dnf_upgrade(normal_terminal=False, packages=None):
         command = COMMAND_TERMINAL
     else:
         command = COMMAND_DROPDOWN
-    if packages is None:
-        call(command.format(dnf=COMMAND_DNF_UPGRADE), shell=True)
+    if no_safe:
+        wrapper = ''
     else:
-        call(command.format(dnf=COMMAND_DNF_UPGRADE + ' ' + ' '.join(packages)), shell=True)
+        wrapper = safe_wrapper()
+    if packages is None:
+        concrete_command = command.format(dnf=COMMAND_DNF_UPGRADE, safe_wrapper=wrapper)
+    else:
+        concrete_command = command.format(dnf=COMMAND_DNF_UPGRADE + ' ' + ' '.join(packages),
+                                          safe_wrapper=wrapper)
+    call(concrete_command, shell=True)
 
 
 class Application:
-    def __init__(self, all_updates, normal_terminal, interval):
+    def __init__(self, all_updates, normal_terminal, interval, no_safe):
         self.normal_terminal = normal_terminal
         self.all_updates = all_updates
         self.interval = interval
+        self.no_safe = no_safe
         self.worker_check_thread = None
         self.worker_upgrade_thread = None
         self.notification = None
@@ -118,9 +156,9 @@ class Application:
         Runs DNF upgrade based on user preferences in another thread to not block GUI.
         """
         if all_packages:
-            dnf_upgrade(self.normal_terminal)
+            dnf_upgrade(self.normal_terminal, no_safe=self.no_safe)
         else:
-            dnf_upgrade(self.normal_terminal, self.updates['security'])
+            dnf_upgrade(self.normal_terminal, self.updates['security'], self.no_safe)
 
     def found_updates(self):
         """
@@ -139,7 +177,16 @@ class Application:
         self.build_menu()
         self.status_icon.set_visible(True)
 
-        self.notification = Notify.Notification.new(message)
+        if self.no_safe:
+            self.notification = Notify.Notification.new(message)
+        else:
+            wrapper = safe_wrapper()
+            if wrapper == '':
+                body = "Neither 'screen' not 'tmux' is installed.\n" \
+                       "It is recommended to install either to make update process more robust."
+                self.notification = Notify.Notification.new(message, body)
+            else:
+                self.notification = Notify.Notification.new(message)
         if self.security_updates_nr > 0:
             self.notification.add_action('clicked_upgrade_security',
                                          'Upgrade security ({})'.format(self.security_updates_nr),
@@ -219,10 +266,12 @@ if __name__ == '__main__':
                                      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('-a', '--all', action='store_true',
                         help='report on all updates, not just security ones')
+    parser.add_argument('-s', '--no-safe-update', action='store_true',
+                        help='do not use either screen or tmux for safer updates')
     parser.add_argument('-n', '--normal-terminal', action='store_true',
                         help='use normal terminal window, by default dropdown terminal is used')
     parser.add_argument('-i', '--interval', type=float, default=4.0,
                         help='check for updates every INTERVAL hours (can be fraction)')
     args = parser.parse_args()
-    app = Application(args.all, args.normal_terminal, args.interval)
+    app = Application(args.all, args.normal_terminal, args.interval, args.no_safe_update)
     Gtk.main()
