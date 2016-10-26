@@ -34,7 +34,7 @@ to install either.
 
 import argparse
 from os import path
-from subprocess import Popen, PIPE, call
+from subprocess import Popen, PIPE, call, DEVNULL
 import sys
 from threading import Thread
 
@@ -45,13 +45,17 @@ from gi.repository import GLib, Gtk, Notify
 
 COMMAND_DNF_UPDATEINFO = 'nice -n 19 dnf updateinfo list updates --refresh'
 COMMAND_DNF_UPGRADE = 'sudo dnf upgrade'
-BASH_COMMAND = '{safe_wrapper} bash -c \'echo {dnf}; {dnf}; read -p "Press ENTER to close window"\''
-COMMAND_TERMINAL = 'xfce4-terminal --maximize -x {}'.format(BASH_COMMAND)
-COMMAND_DROPDOWN = 'xfce4-terminal --tab --title Update --drop-down -x {}'.format(BASH_COMMAND)
+COMMANDS_NORMAL = 'echo {dnf}; {dnf};'
+COMMANDS_WRAPPER = r'echo "Using \`{}\` to run commands..."; '
+COMMAND_BASH = 'bash -c \'{} read -p "Press ENTER to close window"\''
+COMMAND_TERMINAL = 'xfce4-terminal --maximize -x {}'
+COMMAND_DROPDOWN = 'xfce4-terminal --tab --title Update --drop-down -x {}'
 
 WD = path.dirname(path.abspath(sys.argv[0]))  # Manage to run script anywhere in the path
 ICON_YELLOW = path.join(WD, 'Hopstarter-Soft-Scraps-Button-Blank-Yellow.ico')
 ICON_RED = path.join(WD, 'Hopstarter-Soft-Scraps-Button-Blank-Red.ico')
+
+SCREEN, TMUX = range(2)
 
 
 def safe_wrapper():
@@ -59,13 +63,12 @@ def safe_wrapper():
     Checks if 'screen' or 'tmux' are installed and returns appropriate wrapper to use.
 
     Returns:
-         (str): command to add as part of dnf upgrade command to make it safe from X server crashes
+         (int): constant SCREEN or TMUX if any of those is installed
     """
-    if call('command -v screen', shell=True) == 0:
-        return 'screen'
-    if call('command -v tmux', shell=True) == 0:
-        return 'tmux new'
-    return ''
+    if call('command -v screen', shell=True, stdout=DEVNULL) == 0:
+        return SCREEN
+    if call('command -v tmux', shell=True, stdout=DEVNULL) == 0:
+        return TMUX
 
 
 def dnf_check_updates():
@@ -95,21 +98,35 @@ def dnf_upgrade(normal_terminal=False, packages=None, no_safe=False):
         normal_terminal (bool): use command in normal terminal window, dropdown terminal is used
                                 by default
         packages (list): list of packages to upgrade, all packages are updated by default
+        no_safe (bool): if True no wrapper such as 'screen' or 'tmux' will be used, by default
+                        either of these is used to make update process more robust
     """
-    if normal_terminal:
-        command = COMMAND_TERMINAL
-    else:
-        command = COMMAND_DROPDOWN
     if no_safe:
-        wrapper = ''
+        wrapper = None
     else:
         wrapper = safe_wrapper()
+
     if packages is None:
-        concrete_command = command.format(dnf=COMMAND_DNF_UPGRADE, safe_wrapper=wrapper)
+        commands = COMMANDS_NORMAL.format(dnf=COMMAND_DNF_UPGRADE)
     else:
-        concrete_command = command.format(dnf=COMMAND_DNF_UPGRADE + ' ' + ' '.join(packages),
-                                          safe_wrapper=wrapper)
-    call(concrete_command, shell=True)
+        commands = COMMANDS_NORMAL.format(dnf=COMMAND_DNF_UPGRADE + ' ' + ' '.join(packages))
+
+    if wrapper == SCREEN:
+        commands = COMMANDS_WRAPPER.format('screen') + commands
+        command_bash = 'screen ' + COMMAND_BASH.format(commands)
+    elif wrapper == TMUX:
+        commands = COMMANDS_WRAPPER.format('tmux') + commands
+        command_bash = 'tmux new ' + COMMAND_BASH.format(commands)
+    else:
+        command_bash = COMMAND_BASH.format(commands)
+
+    if normal_terminal:
+        terminal_command = COMMAND_TERMINAL.format(command_bash)
+    else:
+        terminal_command = COMMAND_DROPDOWN.format(command_bash)
+
+    # print(terminal_command)
+    call(terminal_command, shell=True)
 
 
 class Application:
@@ -181,8 +198,8 @@ class Application:
             self.notification = Notify.Notification.new(message)
         else:
             wrapper = safe_wrapper()
-            if wrapper == '':
-                body = "Neither 'screen' not 'tmux' is installed.\n" \
+            if wrapper is None:
+                body = "Neither 'screen' nor 'tmux' is installed.\n" \
                        "It is recommended to install either to make update process more robust."
                 self.notification = Notify.Notification.new(message, body)
             else:
@@ -232,6 +249,8 @@ class Application:
 
     def on_icon_click(self, sender):
         self.status_icon.set_visible(False)
+        if self.notification is not None:
+            self.notification.close()
 
     def on_menu(self, sender, button, time):
         self.menu.show_all()
