@@ -35,7 +35,6 @@ to install either.
 import argparse
 from os import path
 from subprocess import Popen, PIPE, call, DEVNULL
-import sys
 from threading import Thread
 
 import gi
@@ -51,7 +50,7 @@ COMMAND_BASH = 'bash -c \'{} read -p "Press ENTER to close window"\''
 COMMAND_TERMINAL = 'xfce4-terminal --maximize -x {}'
 COMMAND_DROPDOWN = 'xfce4-terminal --tab --title Update --drop-down -x {}'
 
-WD = path.dirname(path.abspath(sys.argv[0]))  # Manage to run script anywhere in the path
+WD = path.dirname(path.realpath(__file__))  # Manage to run script anywhere in the path
 ICON_YELLOW = path.join(WD, 'Hopstarter-Soft-Scraps-Button-Blank-Yellow.ico')
 ICON_RED = path.join(WD, 'Hopstarter-Soft-Scraps-Button-Blank-Red.ico')
 
@@ -74,6 +73,7 @@ def safe_wrapper():
 def dnf_check_updates():
     """
     Get list of updates using dnf and categorize by update type.
+    See https://github.com/rpm-software-management/dnf/blob/master/dnf/cli/commands/updateinfo.py
 
     Returns:
         (dict): dictionary of lists of updated packages classified by update type
@@ -81,12 +81,16 @@ def dnf_check_updates():
     p = Popen(COMMAND_DNF_UPDATEINFO, shell=True, stdout=PIPE, stderr=PIPE)
     result = p.communicate()
     stdout_data = [a.decode('utf-8') for a in result[0].split(b'\n')]
-    updates = {'bugfix': [], 'enhancement': [], 'security': []}
-    for line in stdout_data:
-        if any(a in line for a in updates.keys()):
+    updates = {'bugfix': [], 'enhancement': [], 'security': [], 'unknown': [], 'newpackage': []}
+    for line in stdout_data[1:]:  # Skip header
+        if line:  # Skip empty line
             update_type, package = line.split()[1:]
             package_name = '-'.join(package.split('-')[:-2])
-            updates[update_type].append(package_name)
+            if update_type in updates.keys():
+                updates[update_type].append(package_name)
+            else:
+                # "Unknown/Sec." etc.
+                updates['security'].append(package_name)
     return updates
 
 
@@ -184,10 +188,12 @@ class Application:
         if self.security_updates_nr > 0:
             template = '{} security updates found out of {} total updates'
             message = template.format(self.security_updates_nr, self.updates_nr)
+            icon = ICON_RED
             self.status_icon.set_from_file(ICON_RED)
         else:
             template = '{} updates found'
             message = template.format(self.updates_nr)
+            icon = ICON_YELLOW
             self.status_icon.set_from_file(ICON_YELLOW)
 
         self.status_icon.set_tooltip_text(message)
@@ -195,15 +201,15 @@ class Application:
         self.status_icon.set_visible(True)
 
         if self.no_safe:
-            self.notification = Notify.Notification.new(message)
+            self.notification = Notify.Notification.new(message, icon=icon)
         else:
             wrapper = safe_wrapper()
             if wrapper is None:
                 body = "Neither 'screen' nor 'tmux' is installed.\n" \
                        "It is recommended to install either to make update process more robust."
-                self.notification = Notify.Notification.new(message, body)
+                self.notification = Notify.Notification.new(message, body, icon=icon)
             else:
-                self.notification = Notify.Notification.new(message)
+                self.notification = Notify.Notification.new(message, icon=icon)
         if self.security_updates_nr > 0:
             self.notification.add_action('clicked_upgrade_security',
                                          'Upgrade security ({})'.format(self.security_updates_nr),
